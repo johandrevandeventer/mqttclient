@@ -31,8 +31,8 @@ type MQTTConfig struct {
 // MQTTClient is the interface for the MQTT client
 type MQTTClient struct {
 	mu           sync.Mutex
-	client       mqtt.Client
-	config       MQTTConfig
+	Client       mqtt.Client
+	Config       MQTTConfig
 	logger       *zap.Logger
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -46,7 +46,7 @@ func NewMQTTClient(config MQTTConfig, logger *zap.Logger) *MQTTClient {
 	config.ClientID = newClientId
 
 	return &MQTTClient{
-		config: config,
+		Config: config,
 	}
 }
 
@@ -60,21 +60,21 @@ func (m *MQTTClient) Connect(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.logger.Info("Connecting to MQTT broker", zap.String("broker", m.config.Broker), zap.Int("port", m.config.Port))
-	m.logger.Debug("MQTT client configuration", zap.String("client_id", m.config.ClientID), zap.String("topic", m.config.Topic), zap.Uint8("qos", m.config.Qos), zap.Bool("clean_session", m.config.CleanSession), zap.Int("keep_alive", m.config.KeepAlive))
+	m.logger.Info("Connecting to MQTT broker", zap.String("broker", m.Config.Broker), zap.Int("port", m.Config.Port))
+	m.logger.Debug("MQTT client configuration", zap.String("client_id", m.Config.ClientID), zap.String("topic", m.Config.Topic), zap.Uint8("qos", m.Config.Qos), zap.Bool("clean_session", m.Config.CleanSession), zap.Int("keep_alive", m.Config.KeepAlive))
 
 	opts := mqtt.NewClientOptions()
-	opts.AddBroker(fmt.Sprintf("tcp://%s:%d", m.config.Broker, m.config.Port))
-	opts.SetClientID(m.config.ClientID)
-	opts.SetCleanSession(m.config.CleanSession)
-	opts.SetKeepAlive(time.Duration(m.config.KeepAlive) * time.Second)
-	opts.SetUsername(m.config.Username)
-	opts.SetPassword(m.config.Password)
+	opts.AddBroker(fmt.Sprintf("tcp://%s:%d", m.Config.Broker, m.Config.Port))
+	opts.SetClientID(m.Config.ClientID)
+	opts.SetCleanSession(m.Config.CleanSession)
+	opts.SetKeepAlive(time.Duration(m.Config.KeepAlive) * time.Second)
+	opts.SetUsername(m.Config.Username)
+	opts.SetPassword(m.Config.Password)
 
 	opts.OnConnect = m.onConnect
 	opts.OnConnectionLost = m.onConnectionLost
 
-	m.client = mqtt.NewClient(opts)
+	m.Client = mqtt.NewClient(opts)
 
 	m.ctx, m.cancel = context.WithCancel(ctx)
 
@@ -83,7 +83,7 @@ func (m *MQTTClient) Connect(ctx context.Context) error {
 
 	m.messageQueue.StartProcessing(m.processMessage)
 
-	token := m.client.Connect()
+	token := m.Client.Connect()
 	if token.Wait() && token.Error() != nil {
 		m.logger.Error("Error connecting to MQTT broker", zap.Error(token.Error()))
 		return fmt.Errorf("error connecting to MQTT broker: %v", token.Error())
@@ -96,8 +96,8 @@ func (m *MQTTClient) Disconnect() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.client != nil && m.client.IsConnected() {
-		m.client.Disconnect(250)
+	if m.Client != nil && m.Client.IsConnected() {
+		m.Client.Disconnect(250)
 		m.logger.Info("Disconnected from MQTT broker")
 	}
 
@@ -108,13 +108,13 @@ func (m *MQTTClient) Subscribe() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.client == nil || !m.client.IsConnected() {
+	if m.Client == nil || !m.Client.IsConnected() {
 		return fmt.Errorf("client is not connected")
 	}
 
-	token := m.client.Subscribe(m.config.Topic, byte(m.config.Qos), m.onMessage)
+	token := m.Client.Subscribe(m.Config.Topic, byte(m.Config.Qos), m.onMessage)
 	token.Wait()
-	m.logger.Info("Subscribed to topic", zap.String("topic", m.config.Topic))
+	m.logger.Info("Subscribed to topic", zap.String("topic", m.Config.Topic))
 	return token.Error()
 }
 

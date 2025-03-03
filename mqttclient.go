@@ -12,8 +12,6 @@ import (
 	"go.uber.org/zap"
 )
 
-var mqttLogger *zap.Logger
-
 var messageChannel = make(chan mqtt.Message, 100)
 
 // MQTTConfig is the configuration for the MQTT client
@@ -33,8 +31,9 @@ type MQTTConfig struct {
 // MQTTClient is the interface for the MQTT client
 type MQTTClient struct {
 	mu           sync.Mutex
-	Client       mqtt.Client
-	Config       MQTTConfig
+	client       mqtt.Client
+	config       MQTTConfig
+	logger       *zap.Logger
 	ctx          context.Context
 	cancel       context.CancelFunc
 	messageQueue *MessageQueue
@@ -47,7 +46,7 @@ func NewMQTTClient(config MQTTConfig, logger *zap.Logger) *MQTTClient {
 	config.ClientID = newClientId
 
 	return &MQTTClient{
-		Config: config,
+		config: config,
 	}
 }
 
@@ -61,21 +60,21 @@ func (m *MQTTClient) Connect(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	mqttLogger.Info("Connecting to MQTT broker", zap.String("broker", m.Config.Broker), zap.Int("port", m.Config.Port))
-	mqttLogger.Debug("MQTT client configuration", zap.String("client_id", m.Config.ClientID), zap.String("topic", m.Config.Topic), zap.Uint8("qos", m.Config.Qos), zap.Bool("clean_session", m.Config.CleanSession), zap.Int("keep_alive", m.Config.KeepAlive))
+	m.logger.Info("Connecting to MQTT broker", zap.String("broker", m.config.Broker), zap.Int("port", m.config.Port))
+	m.logger.Debug("MQTT client configuration", zap.String("client_id", m.config.ClientID), zap.String("topic", m.config.Topic), zap.Uint8("qos", m.config.Qos), zap.Bool("clean_session", m.config.CleanSession), zap.Int("keep_alive", m.config.KeepAlive))
 
 	opts := mqtt.NewClientOptions()
-	opts.AddBroker(fmt.Sprintf("tcp://%s:%d", m.Config.Broker, m.Config.Port))
-	opts.SetClientID(m.Config.ClientID)
-	opts.SetCleanSession(m.Config.CleanSession)
-	opts.SetKeepAlive(time.Duration(m.Config.KeepAlive) * time.Second)
-	opts.SetUsername(m.Config.Username)
-	opts.SetPassword(m.Config.Password)
+	opts.AddBroker(fmt.Sprintf("tcp://%s:%d", m.config.Broker, m.config.Port))
+	opts.SetClientID(m.config.ClientID)
+	opts.SetCleanSession(m.config.CleanSession)
+	opts.SetKeepAlive(time.Duration(m.config.KeepAlive) * time.Second)
+	opts.SetUsername(m.config.Username)
+	opts.SetPassword(m.config.Password)
 
 	opts.OnConnect = m.onConnect
 	opts.OnConnectionLost = m.onConnectionLost
 
-	m.Client = mqtt.NewClient(opts)
+	m.client = mqtt.NewClient(opts)
 
 	m.ctx, m.cancel = context.WithCancel(ctx)
 
@@ -84,9 +83,9 @@ func (m *MQTTClient) Connect(ctx context.Context) error {
 
 	m.messageQueue.StartProcessing(m.processMessage)
 
-	token := m.Client.Connect()
+	token := m.client.Connect()
 	if token.Wait() && token.Error() != nil {
-		mqttLogger.Error("Error connecting to MQTT broker", zap.Error(token.Error()))
+		m.logger.Error("Error connecting to MQTT broker", zap.Error(token.Error()))
 		return fmt.Errorf("error connecting to MQTT broker: %v", token.Error())
 	}
 
@@ -97,9 +96,9 @@ func (m *MQTTClient) Disconnect() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.Client != nil && m.Client.IsConnected() {
-		m.Client.Disconnect(250)
-		mqttLogger.Info("Disconnected from MQTT broker")
+	if m.client != nil && m.client.IsConnected() {
+		m.client.Disconnect(250)
+		m.logger.Info("Disconnected from MQTT broker")
 	}
 
 	m.cancel()
@@ -109,33 +108,33 @@ func (m *MQTTClient) Subscribe() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.Client == nil || !m.Client.IsConnected() {
+	if m.client == nil || !m.client.IsConnected() {
 		return fmt.Errorf("client is not connected")
 	}
 
-	token := m.Client.Subscribe(m.Config.Topic, byte(m.Config.Qos), m.onMessage)
+	token := m.client.Subscribe(m.config.Topic, byte(m.config.Qos), m.onMessage)
 	token.Wait()
-	mqttLogger.Info("Subscribed to topic", zap.String("topic", m.Config.Topic))
+	m.logger.Info("Subscribed to topic", zap.String("topic", m.config.Topic))
 	return token.Error()
 }
 
 func (m *MQTTClient) onConnect(client mqtt.Client) {
-	mqttLogger.Info("Connected to MQTT broker")
+	m.logger.Info("Connected to MQTT broker")
 }
 
 func (m *MQTTClient) onConnectionLost(client mqtt.Client, err error) {
-	mqttLogger.Error("Connection lost. Attempting to reconnect...", zap.Error(err))
+	m.logger.Error("Connection lost. Attempting to reconnect...", zap.Error(err))
 
 	for {
 		select {
 		case <-m.ctx.Done():
-			mqttLogger.Warn("Context canceled, stopping reconnection attempts")
+			m.logger.Warn("Context canceled, stopping reconnection attempts")
 			return
 		default:
 			if err := m.Connect(m.ctx); err != nil {
-				mqttLogger.Warn("Reconnection failed. Retrying...", zap.Error(err))
+				m.logger.Warn("Reconnection failed. Retrying...", zap.Error(err))
 			} else {
-				mqttLogger.Info("Reconnected to MQTT broker")
+				m.logger.Info("Reconnected to MQTT broker")
 				return
 			}
 			time.Sleep(5 * time.Second) // Wait before retrying
@@ -146,8 +145,8 @@ func (m *MQTTClient) onConnectionLost(client mqtt.Client, err error) {
 func (m *MQTTClient) onMessage(client mqtt.Client, msg mqtt.Message) {
 	topic := msg.Topic()
 
-	mqttLogger.Info("Received message", zap.String("topic", topic))
-	mqttLogger.Debug("Message payload", zap.String("payload", string(msg.Payload())))
+	m.logger.Info("Received message", zap.String("topic", topic))
+	m.logger.Debug("Message payload", zap.String("payload", string(msg.Payload())))
 
 	// Add the received message to the message queue for asynchronous processing
 	m.messageQueue.Enqueue(msg)

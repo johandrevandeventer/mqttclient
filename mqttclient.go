@@ -47,6 +47,7 @@ func NewMQTTClient(config MQTTConfig, logger *zap.Logger) *MQTTClient {
 
 	return &MQTTClient{
 		Config: config,
+		logger: logger,
 	}
 }
 
